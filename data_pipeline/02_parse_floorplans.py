@@ -43,6 +43,24 @@ def extract_rooms(svg_path: Path) -> list[str]:
     return rooms
 
 
+def is_likely_multi_unit(rooms: list[str]) -> bool:
+    """
+    Detects floor plans that likely represent an entire multi-unit building
+    floor (common in CubiCasa5k's Finnish apartment-building samples) rather
+    than a single dwelling -- which would otherwise get a misleading BHK
+    label (e.g. "1BHK" derived from the one Bedroom-tagged room found
+    anywhere in a file that actually contains several merged apartments).
+
+    Signal: more than one EXACT "Kitchen" room. A single dwelling
+    essentially never has two full kitchens. Note this must be an exact
+    match, not a substring check -- "Kitchen Scullery" (a legitimate
+    secondary prep room attached to ONE kitchen) would otherwise cause
+    false positives on entirely normal single-family homes.
+    """
+    kitchen_count = sum(1 for r in rooms if r == "Kitchen")
+    return kitchen_count > 1
+
+
 def derive_bhk_label(rooms: list[str]) -> str:
     bedroom_count = sum(1 for r in rooms if r == "Bedroom")
     if bedroom_count == 0:
@@ -83,6 +101,7 @@ def main():
 
     results = []
     bhk_tally: dict[str, int] = {}
+    excluded_multi_unit = []
 
     for sample_dir in sample_dirs:
         svg_path = sample_dir / "model.svg"
@@ -91,6 +110,11 @@ def main():
             continue
 
         rooms = extract_rooms(svg_path)
+
+        if is_likely_multi_unit(rooms):
+            excluded_multi_unit.append(sample_dir.name)
+            continue
+
         bhk_label = derive_bhk_label(rooms)
         caption = build_caption(rooms, bhk_label)
 
@@ -107,6 +131,9 @@ def main():
         json.dump(results, f, indent=2)
 
     print(f"\nParsed {len(results)} samples successfully. Saved to {OUTPUT_JSON}")
+    if excluded_multi_unit:
+        print(f"Excluded {len(excluded_multi_unit)} likely multi-unit floor plans "
+              f"(2+ exact 'Kitchen' rooms): {excluded_multi_unit}")
     print("\n=== BHK distribution across this subset ===")
     for label, count in sorted(bhk_tally.items(), key=lambda x: -x[1]):
         print(f"  {count:3d}  {label}")
