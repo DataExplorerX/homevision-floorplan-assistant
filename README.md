@@ -1,5 +1,7 @@
 # HomeVision — AI Floor Plan Assistant
 
+**Live demo: http://13.234.217.141:8000**
+
 A chat-driven floor plan search tool: describe what you want ("a 2 bedroom
 apartment with a balcony") and get back real, matching floor plans from the
 [CubiCasa5K](https://github.com/CubiCasa/CubiCasa5k) dataset, using hybrid
@@ -9,7 +11,8 @@ search (exact bedroom-count filtering + semantic similarity ranking).
 
 - ✅ **Data pipeline** (download → parse → caption → embed → ingest): working
 - ✅ **Hybrid search** (structured filter + semantic ranking): working
-- ✅ **FastAPI backend + chat UI**: working, local only (not yet deployed)
+- ✅ **FastAPI backend + chat UI**: working
+- ✅ **Deployed**: running live on an AWS EC2 instance (see "Deployment" below)
 
 ## Why this dataset, and a licensing note
 
@@ -24,7 +27,7 @@ for something with a commercial-use license.
 CubiCasa5K (remote, on Zenodo)
       │  partial download via HTTP range requests (remotezip)
       ▼
-data_pipeline/01_download_subset.py   -- pulls ~60 samples, prioritizing
+data_pipeline/01_download_subset.py   -- pulls a 60-sample subset, prioritizing
                                           the high_quality_architectural
                                           subset (proper room labels,
                                           unlike the "colorful" subset
@@ -34,7 +37,10 @@ data_pipeline/02_parse_floorplans.py  -- parses each model.svg, extracts
                                           room types from <g class="Space
                                           ..."> elements, derives an
                                           authoritative BHK label by
-                                          counting "Bedroom" rooms
+                                          counting "Bedroom" rooms, and
+                                          excludes likely multi-unit floor
+                                          plans (see bugs section below) --
+                                          59 samples make it through
       ▼
 data_pipeline/03_polish_captions.py   -- rewrites the room list into a
                                           natural sentence via Groq
@@ -116,6 +122,10 @@ python search/hybrid_search.py         # full hybrid search (the real thing)
 
 ## Running the full app (API + chat UI)
 
+The live version is already running at **http://13.234.217.141:8000** — no setup needed to just try it.
+
+To run it yourself, locally:
+
 ```bash
 uvicorn api.app:app --reload --port 8000
 ```
@@ -123,6 +133,23 @@ uvicorn api.app:app --reload --port 8000
 Then open **http://localhost:8000** in your browser — a simple chat interface where you can type a request ("a 2 bedroom apartment with a balcony") and see matching floor plan images with their captions.
 
 The API also has interactive docs at **http://localhost:8000/docs** (FastAPI's built-in Swagger UI) — useful for testing `POST /api/search` directly without the frontend.
+
+## Deployment
+
+Running on a free-tier AWS EC2 instance (Ubuntu, t2/t3.micro), not Lambda —
+deliberately a different AWS service than the AWS Ops MCP Server project,
+both for a genuine technical reason (this app's `sentence-transformers`/
+`torch` dependency is large and doesn't fit Lambda's deployment model
+without adding container-image complexity) and because showing both
+serverless and traditional-VM deployment experience is a stronger signal
+than repeating the same pattern twice.
+
+The app runs as a systemd service (`homevision.service`) so it survives
+SSH disconnects and restarts automatically if it ever crashes. The floor
+plan image files are downloaded directly onto the EC2 instance via
+`01_download_subset.py` -- they're not committed to the repo, both because
+of the dataset's non-commercial license and because they're regeneratable
+data, not code.
 
 ## Utility / troubleshooting scripts (`tools/`)
 
@@ -132,18 +159,16 @@ The API also has interactive docs at **http://localhost:8000/docs** (FastAPI's b
   raw vector-search query with full error output
 - `diagnose_captions.py` — lists exactly which sample IDs have/don't have a
   polished caption
+- `audit_multiunit.py` — flags samples likely representing a multi-unit
+  building floor rather than a single dwelling (detected via duplicate
+  exact "Kitchen" rooms, a signal a genuine single dwelling doesn't have)
 - `data_pipeline/reset_captions_utility.py` — clears `caption_polished` for
   the first N samples in `parsed_floorplans_polished.json`, forcing them to
   regenerate on the next run of `03_polish_captions.py`. Edit `NUM_TO_RESET`
-  at the top of the file (currently set to reset all 60).
-
+  at the top of the file.
 
 ## Extending it (next steps)
 
-- Add the Stable Diffusion image-variation step (e.g. "make it look
-  modern") via a hosted inference API
-- Deploy the API + UI somewhere real (e.g. a small VM, or containerized on
-  AWS ECS)
 - Consider re-adding an IVFFLAT/HNSW index once the dataset grows well
-  beyond ~1,000 rows (removed for now — at only 60 rows it was actually
+  beyond ~1,000 rows (removed for now — at only 59 rows it was actually
   *breaking* search results by approximating over too few clusters)
