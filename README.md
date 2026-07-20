@@ -1,0 +1,150 @@
+# HomeVision — AI Floor Plan Assistant
+
+A chat-driven floor plan search tool: describe what you want ("a 2 bedroom
+apartment with a balcony") and get back real, matching floor plans from the
+[CubiCasa5K](https://github.com/CubiCasa/CubiCasa5k) dataset, using hybrid
+search (exact bedroom-count filtering + semantic similarity ranking).
+
+## Status
+
+- ✅ **Data pipeline** (download → parse → caption → embed → ingest): working
+- ✅ **Hybrid search** (structured filter + semantic ranking): working
+- ⏳ **FastAPI backend + chat UI**: not yet built — next phase
+
+## Why this dataset, and a licensing note
+
+CubiCasa5K is licensed **CC BY-NC-SA 4.0** (non-commercial, attribution
+required, share-alike) — fine for this personal/portfolio project, but if
+this is ever extended commercially, the dataset would need to be swapped
+for something with a commercial-use license.
+
+## Architecture
+
+```
+CubiCasa5K (remote, on Zenodo)
+      │  partial download via HTTP range requests (remotezip)
+      ▼
+data_pipeline/01_download_subset.py   -- pulls ~60 samples, prioritizing
+                                          the high_quality_architectural
+                                          subset (proper room labels,
+                                          unlike the "colorful" subset
+                                          which is mostly "Undefined")
+      ▼
+data_pipeline/02_parse_floorplans.py  -- parses each model.svg, extracts
+                                          room types from <g class="Space
+                                          ..."> elements, derives an
+                                          authoritative BHK label by
+                                          counting "Bedroom" rooms
+      ▼
+data_pipeline/03_polish_captions.py   -- rewrites the room list into a
+                                          natural sentence via Groq
+                                          (free tier). Bedroom count is
+                                          PREPENDED from our own parsed
+                                          data, never restated by the LLM,
+                                          so it can never be wrong.
+      ▼
+data_pipeline/04_audit_captions.py    -- verifies no caption contradicts
+                                          its authoritative BHK label
+      ▼
+data_pipeline/05_setup_supabase_table.sql  -- creates the pgvector-enabled
+                                               table (run once, in Supabase's
+                                               SQL Editor)
+      ▼
+data_pipeline/06_ingest_to_supabase.py -- embeds each caption locally
+                                           (sentence-transformers,
+                                           no API needed) and upserts
+                                           everything into Supabase
+      ▼
+search/hybrid_search.py               -- the actual product logic:
+                                          search/query_parser.py splits a
+                                          user's message into an exact BHK
+                                          filter + a semantic query, then
+                                          hybrid_search.py applies the
+                                          filter in SQL and ranks by vector
+                                          similarity within that filtered set
+```
+
+## Why hybrid search, not just semantic search
+
+Early testing showed pure semantic search failing in an important way: for
+"a 2 bedroom apartment with a balcony," a **Studio** ranked above actual
+2BHK results, because the embedding model treats "2 bedroom" as a soft
+signal, not a hard requirement. The fix: use Groq to extract the bedroom
+count as a **structured SQL filter** (exact, can't be wrong), and only use
+semantic ranking for the genuinely fuzzy part of the request (balcony,
+style, layout feel).
+
+## Setup
+
+```bash
+python -m venv venv
+source venv/bin/activate      # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+You'll need two free API credentials, set as environment variables in your
+notebook/shell before running anything (never commit these, never paste
+them into chat):
+
+```python
+import os
+os.environ["GROQ_API_KEY"] = "..."       # free, no card: console.groq.com/keys
+os.environ["SUPABASE_DB_URL"] = "..."    # from Supabase: Settings -> Database
+```
+
+## Running the pipeline, in order
+
+All commands assume you're running from this project's root folder (so
+relative paths like `cubicasa5k_subset_v2/` and `parsed_floorplans.json`
+land here, not inside `data_pipeline/`).
+
+```bash
+python data_pipeline/01_download_subset.py     # ~1-2 min, downloads a subset only
+python data_pipeline/02_parse_floorplans.py    # instant, parses room data
+python data_pipeline/03_polish_captions.py     # ~3 min, Groq API calls, resumable
+python data_pipeline/04_audit_captions.py      # instant, should report 0 mismatches
+# Run 05_setup_supabase_table.sql manually in Supabase's SQL Editor (one-time)
+python data_pipeline/06_ingest_to_supabase.py  # ~1 min, embeds + upserts to DB
+```
+
+## Testing the search
+
+```bash
+python tools/test_semantic_search.py   # pure semantic search (shows the limitation)
+python search/hybrid_search.py         # full hybrid search (the real thing)
+```
+
+## Utility / troubleshooting scripts (`tools/`)
+
+- `inspect_svg.py` — dump a single `model.svg`'s structure; useful if
+  CubiCasa5k's format ever looks different than expected
+- `diagnose_supabase.py` — checks row counts, null embeddings, and runs the
+  raw vector-search query with full error output
+- `diagnose_captions.py` — lists exactly which sample IDs have/don't have a
+  polished caption
+- `data_pipeline/reset_captions_utility.py` — clears `caption_polished` for
+  the first N samples in `parsed_floorplans_polished.json`, forcing them to
+  regenerate on the next run of `03_polish_captions.py`. Edit `NUM_TO_RESET`
+  at the top of the file (currently set to reset all 60).
+
+## A real bug worth knowing about (interview-relevant)
+
+`03_polish_captions.py` originally asked the LLM to restate the full room
+list *including* the bedroom count in prose. An audit
+(`04_audit_captions.py`) caught 4 out of 60 captions where the model
+miscounted bedrooms relative to the actual parsed data (e.g. claiming
+"three bedrooms" for a unit our parser correctly identified as 2BHK). The
+fix: never let the LLM state a fact we already know precisely — the
+bedroom count is now prepended from parsed data, and the LLM is only asked
+to describe the *other* rooms, explicitly forbidden from mentioning bedroom
+count at all.
+
+## Extending it (next steps)
+
+- Wrap `search/hybrid_search.py` in a FastAPI endpoint
+- Build a simple chat UI (React) on top of that endpoint
+- Add the Stable Diffusion image-variation step (e.g. "make it look
+  modern") via a hosted inference API
+- Consider re-adding an IVFFLAT/HNSW index once the dataset grows well
+  beyond ~1,000 rows (removed for now — at only 60 rows it was actually
+  *breaking* search results by approximating over too few clusters)

@@ -1,0 +1,19 @@
+# Downloaded/generated data -- large, regeneratable, don't commit
+cubicasa5k_subset_v2/
+cubicasa5k_subset/
+parsed_floorplans.json
+parsed_floorplans_polished.json
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Credentials -- never commit these
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+.DS_Store
+Untitled.ipynb

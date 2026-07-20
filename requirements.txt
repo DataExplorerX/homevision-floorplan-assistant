@@ -1,0 +1,4 @@
+remotezip
+groq
+sentence-transformers
+psycopg2-binary
