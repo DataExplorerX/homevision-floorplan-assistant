@@ -9,7 +9,7 @@ search (exact bedroom-count filtering + semantic similarity ranking).
 
 - ✅ **Data pipeline** (download → parse → caption → embed → ingest): working
 - ✅ **Hybrid search** (structured filter + semantic ranking): working
-- ⏳ **FastAPI backend + chat UI**: not yet built — next phase
+- ✅ **FastAPI backend + chat UI**: working, local only (not yet deployed)
 
 ## Why this dataset, and a licensing note
 
@@ -114,6 +114,16 @@ python tools/test_semantic_search.py   # pure semantic search (shows the limitat
 python search/hybrid_search.py         # full hybrid search (the real thing)
 ```
 
+## Running the full app (API + chat UI)
+
+```bash
+uvicorn api.app:app --reload --port 8000
+```
+
+Then open **http://localhost:8000** in your browser — a simple chat interface where you can type a request ("a 2 bedroom apartment with a balcony") and see matching floor plan images with their captions.
+
+The API also has interactive docs at **http://localhost:8000/docs** (FastAPI's built-in Swagger UI) — useful for testing `POST /api/search` directly without the frontend.
+
 ## Utility / troubleshooting scripts (`tools/`)
 
 - `inspect_svg.py` — dump a single `model.svg`'s structure; useful if
@@ -127,24 +137,13 @@ python search/hybrid_search.py         # full hybrid search (the real thing)
   regenerate on the next run of `03_polish_captions.py`. Edit `NUM_TO_RESET`
   at the top of the file (currently set to reset all 60).
 
-## A real bug worth knowing about (interview-relevant)
-
-`03_polish_captions.py` originally asked the LLM to restate the full room
-list *including* the bedroom count in prose. An audit
-(`04_audit_captions.py`) caught 4 out of 60 captions where the model
-miscounted bedrooms relative to the actual parsed data (e.g. claiming
-"three bedrooms" for a unit our parser correctly identified as 2BHK). The
-fix: never let the LLM state a fact we already know precisely — the
-bedroom count is now prepended from parsed data, and the LLM is only asked
-to describe the *other* rooms, explicitly forbidden from mentioning bedroom
-count at all.
 
 ## Extending it (next steps)
 
-- Wrap `search/hybrid_search.py` in a FastAPI endpoint
-- Build a simple chat UI (React) on top of that endpoint
 - Add the Stable Diffusion image-variation step (e.g. "make it look
   modern") via a hosted inference API
+- Deploy the API + UI somewhere real (e.g. a small VM, or containerized on
+  AWS ECS)
 - Consider re-adding an IVFFLAT/HNSW index once the dataset grows well
   beyond ~1,000 rows (removed for now — at only 60 rows it was actually
   *breaking* search results by approximating over too few clusters)
