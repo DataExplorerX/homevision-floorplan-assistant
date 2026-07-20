@@ -16,10 +16,13 @@ create table if not exists floorplans (
     embedding vector(384)
 );
 
--- Speeds up similarity search once the table has more rows. Harmless (just
--- a bit unnecessary) at only 60 rows, but correct to set up now since it's
--- the same index you'd want in production.
-create index if not exists floorplans_embedding_idx
-    on floorplans
-    using ivfflat (embedding vector_cosine_ops)
-    with (lists = 10);
+-- Deliberately NOT creating an IVFFLAT/HNSW index here. At this dataset's
+-- scale (~60 rows), an approximate index actively breaks search results:
+-- IVFFLAT only probes a small fraction of its clusters by default, and
+-- combined with a WHERE filter (e.g. bhk_label = '2BHK') that narrows an
+-- already-tiny table further, the probed cluster often has zero overlap
+-- with the rows that actually match -- silently returning 0 results for
+-- queries that should have real matches. A plain sequential scan (the
+-- default with no index) is both exact and effectively instant at this
+-- size. Only add an approximate index back once the dataset grows well
+-- beyond ~1,000 rows, where the tradeoff actually starts to pay off.
